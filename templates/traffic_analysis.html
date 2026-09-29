@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Traffic Analysis - ML Network Anomaly Detector{% endblock %}
+{% block content %}
+
+<h2 style="margin-bottom:4px;">Traffic Analysis</h2>
+<p class="section-sub">Upload a network traffic CSV file to clean, analyze, and classify it using the trained ML models.</p>
+
+<div class="section">
+    {% if not models_ready %}
+        <p style="color:var(--accent-yellow);">
+            ⚠ ML models are not trained yet. Go to the <a href="{{ url_for('ml_model_page') }}" style="color:var(--accent-yellow); text-decoration:underline;">ML Model page</a> first.
+        </p>
+    {% endif %}
+    <form action="{{ url_for('traffic_upload') }}" method="POST" enctype="multipart/form-data">
+        <div class="upload-box">
+            <p>📂 Select a CSV file with columns: <code>timestamp, src_ip, dst_ip, src_port, dst_port, protocol, duration, packet_count, bytes_transferred, failed_connections</code></p>
+            <input type="file" name="csv_file" accept=".csv" required>
+            <br><br>
+            <button type="submit" class="btn">Upload &amp; Analyze</button>
+        </div>
+    </form>
+    <p class="section-sub" style="margin-top:14px;">
+        Don't have a file handy? Use the sample dataset at <code>data/sample_network_traffic.csv</code>.
+    </p>
+</div>
+
+{% if summary %}
+<div class="stats-grid">
+    <div class="stat-card blue">
+        <div class="label">Batch ID</div>
+        <div class="value" style="font-size:18px;">{{ summary.batch_id }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Total Rows</div>
+        <div class="value">{{ summary.total }}</div>
+    </div>
+    <div class="stat-card green">
+        <div class="label">Normal</div>
+        <div class="value">{{ summary.normal }}</div>
+    </div>
+    <div class="stat-card red">
+        <div class="label">Anomalies</div>
+        <div class="value">{{ summary.anomalies }}</div>
+    </div>
+</div>
+
+<div class="section">
+    <h2>Analysis Results</h2>
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Src IP</th><th>Dst IP</th><th>Src Port</th><th>Dst Port</th><th>Protocol</th>
+                <th>Duration</th><th>Packets</th><th>Bytes</th><th>Failed</th>
+                <th>Status</th><th>Risk Score</th><th>Level</th><th>Explanation</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td>{{ r.src_ip }}</td>
+                <td>{{ r.dst_ip }}</td>
+                <td>{{ r.src_port }}</td>
+                <td>{{ r.dst_port }}</td>
+                <td>{{ r.protocol }}</td>
+                <td>{{ r.duration }}</td>
+                <td>{{ r.packet_count }}</td>
+                <td>{{ r.bytes_transferred }}</td>
+                <td>{{ r.failed_connections }}</td>
+                <td>
+                    {% if r.is_anomaly %}
+                        <span class="badge badge-anomaly">Anomaly</span>
+                    {% else %}
+                        <span class="badge badge-normal">Normal</span>
+                    {% endif %}
+                </td>
+                <td>{{ r.risk_score }}</td>
+                <td><span class="badge badge-{{ r.risk_level|lower }}">{{ r.risk_level }}</span></td>
+                <td style="white-space:normal; min-width:220px;">{{ r.explanation }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Alerts - ML Network Anomaly Detector{% endblock %}
+{% block content %}
+
+<h2 style="margin-bottom:4px;">Alerts</h2>
+<p class="section-sub">All detected anomalies, most recent first.</p>
+
+<div class="section">
+    <form method="GET" style="margin-bottom:16px;">
+        <label for="risk" style="color:var(--text-secondary); font-size:13px; margin-right:8px;">Filter by risk level:</label>
+        <select name="risk" id="risk" onchange="this.form.submit()">
+            {% for level in ['All', 'Low', 'Medium', 'High'] %}
+                <option value="{{ level }}" {{ 'selected' if risk_filter == level }}>{{ level }}</option>
+            {% endfor %}
+        </select>
+    </form>
+
+    {% if db_error %}
+        <div class="flash flash-error">Could not load alerts from MySQL: {{ db_error }}</div>
+    {% else %}
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th><th>Src IP</th><th>Dst IP</th><th>Port</th><th>Protocol</th>
+                <th>Risk Score</th><th>Level</th><th>Explanation</th><th>Status</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for a in alerts %}
+            <tr>
+                <td>{{ a.created_at }}</td>
+                <td>{{ a.src_ip }}</td>
+                <td>{{ a.dst_ip }}</td>
+                <td>{{ a.dst_port }}</td>
+                <td>{{ a.protocol }}</td>
+                <td>{{ a.risk_score }}</td>
+                <td><span class="badge badge-{{ a.risk_level|lower }}">{{ a.risk_level }}</span></td>
+                <td style="white-space:normal; min-width:240px;">{{ a.explanation }}</td>
+                <td>{{ a.status }}</td>
+                <td>
+                    <form action="{{ url_for('update_alert', alert_id=a.id) }}" method="POST" style="display:flex; gap:6px;">
+                        <select name="status">
+                            <option value="New" {{ 'selected' if a.status=='New' }}>New</option>
+                            <option value="Reviewed" {{ 'selected' if a.status=='Reviewed' }}>Reviewed</option>
+                            <option value="Resolved" {{ 'selected' if a.status=='Resolved' }}>Resolved</option>
+                        </select>
+                        <button type="submit" class="btn" style="padding:4px 10px; font-size:12px;">Save</button>
+                    </form>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="10" style="color:var(--text-secondary);">No alerts found.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

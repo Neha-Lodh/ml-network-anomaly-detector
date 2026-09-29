@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Home - ML Network Anomaly Detector{% endblock %}
+{% block content %}
+<section class="hero">
+    <h1>ML-Based Network <span class="highlight">Anomaly Detector</span></h1>
+    <p>
+        A beginner-friendly, defensive cybersecurity project that uses Machine Learning
+        (Isolation Forest + Random Forest) to analyze network traffic logs, detect
+        suspicious activity, and generate a simple 0-100 risk score with a plain-English
+        explanation for every alert.
+    </p>
+    <a href="{{ url_for('traffic_analysis') }}" class="btn">Analyze Traffic</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">View Dashboard</a>
+
+    {% if not models_ready %}
+    <p style="margin-top:18px; color:var(--accent-yellow); font-size:13px;">
+        ⚠ ML models are not trained yet. Visit the <a href="{{ url_for('ml_model_page') }}" style="color:var(--accent-yellow); text-decoration:underline;">ML Model page</a> to train them on the sample dataset first.
+    </p>
+    {% endif %}
+</section>
+
+<div class="feature-grid">
+    <div class="feature-card">
+        <h3>📊 Data Cleaning</h3>
+        <p>Uploaded CSV traffic logs are validated, deduplicated, and cleaned automatically before analysis.</p>
+    </div>
+    <div class="feature-card">
+        <h3>🤖 Dual ML Models</h3>
+        <p>Isolation Forest spots statistical outliers, while Random Forest classifies traffic using learned patterns.</p>
+    </div>
+    <div class="feature-card">
+        <h3>🎯 Risk Scoring</h3>
+        <p>Every record gets a 0-100 risk score and a Low / Medium / High label, with a human-readable reason.</p>
+    </div>
+    <div class="feature-card">
+        <h3>🗄️ MySQL Storage</h3>
+        <p>All traffic records and detected alerts are stored securely using parameterized SQL queries.</p>
+    </div>
+    <div class="feature-card">
+        <h3>📈 Live Dashboard</h3>
+        <p>Interactive Chart.js visualizations show traffic volume, protocol mix, and risk distribution.</p>
+    </div>
+    <div class="feature-card">
+        <h3>🔔 Alerts</h3>
+        <p>A dedicated Alerts page lists every anomaly, filterable by risk level, with review status tracking.</p>
+    </div>
+</div>
+{% endblock %}
