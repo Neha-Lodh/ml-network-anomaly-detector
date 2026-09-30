@@ -87,6 +87,9 @@ def test_connection():
 def insert_traffic_and_alerts(results_df, batch_id: str):
     """
     Insert traffic records and anomalous records into MySQL.
+
+    Uses batch insertion to reduce the number of network
+    round trips between Render and the Aiven MySQL server.
     """
 
     conn = None
@@ -139,10 +142,15 @@ def insert_traffic_and_alerts(results_df, batch_id: str):
 
         cursor = conn.cursor()
 
+        # -------------------------------------------------------
+        # PREPARE TRAFFIC RECORDS
+        # -------------------------------------------------------
+
+        traffic_values = []
+
         for _, row in results_df.iterrows():
 
-            cursor.execute(
-                traffic_insert_sql,
+            traffic_values.append(
                 (
                     batch_id,
 
@@ -176,19 +184,77 @@ def insert_traffic_and_alerts(results_df, batch_id: str):
                     int(row["risk_score"]),
 
                     str(row["risk_level"]),
-                ),
+                )
             )
 
-            traffic_record_id = cursor.lastrowid
+        # -------------------------------------------------------
+        # BATCH INSERT TRAFFIC RECORDS
+        # -------------------------------------------------------
 
-            # ---------------------------------------------------
-            # INSERT ALERT ONLY FOR ANOMALIES
-            # ---------------------------------------------------
+        if traffic_values:
+
+            cursor.executemany(
+                traffic_insert_sql,
+                traffic_values
+            )
+
+        # -------------------------------------------------------
+        # GET INSERTED RECORD IDs
+        # -------------------------------------------------------
+        #
+        # All records from this upload have the same unique
+        # batch_id. We retrieve their generated IDs so that
+        # anomaly alerts can reference the correct traffic row.
+        #
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                src_ip,
+                dst_ip,
+                dst_port,
+                protocol
+            FROM traffic_records
+            WHERE upload_batch_id = %s
+            ORDER BY id ASC
+            """,
+            (batch_id,)
+        )
+
+        inserted_records = cursor.fetchall()
+
+        # -------------------------------------------------------
+        # VERIFY INSERT
+        # -------------------------------------------------------
+
+        if len(inserted_records) != len(results_df):
+
+            raise RuntimeError(
+                "Database insert verification failed: "
+                f"expected {len(results_df)} records but found "
+                f"{len(inserted_records)} records for batch "
+                f"{batch_id}."
+            )
+
+        # -------------------------------------------------------
+        # PREPARE ALERT RECORDS
+        # -------------------------------------------------------
+
+        alert_values = []
+
+        for (_, row), db_record in zip(
+            results_df.iterrows(),
+            inserted_records
+        ):
+
+            traffic_record_id = db_record[0]
+
+            # Insert alert only for anomalous traffic
 
             if bool(row["is_anomaly"]):
 
-                cursor.execute(
-                    alert_insert_sql,
+                alert_values.append(
                     (
                         traffic_record_id,
 
@@ -214,8 +280,23 @@ def insert_traffic_and_alerts(results_df, batch_id: str):
                         )[:500],
 
                         "New",
-                    ),
+                    )
                 )
+
+        # -------------------------------------------------------
+        # BATCH INSERT ALERTS
+        # -------------------------------------------------------
+
+        if alert_values:
+
+            cursor.executemany(
+                alert_insert_sql,
+                alert_values
+            )
+
+        # -------------------------------------------------------
+        # COMMIT EVERYTHING
+        # -------------------------------------------------------
 
         conn.commit()
 
@@ -395,9 +476,11 @@ def get_dashboard_stats():
     finally:
 
         if cursor is not None:
+
             cursor.close()
 
         if conn is not None:
+
             conn.close()
 
 
@@ -433,9 +516,11 @@ def get_recent_alerts(limit: int = 10):
     finally:
 
         if cursor is not None:
+
             cursor.close()
 
         if conn is not None:
+
             conn.close()
 
 
@@ -495,9 +580,11 @@ def get_all_alerts(
     finally:
 
         if cursor is not None:
+
             cursor.close()
 
         if conn is not None:
+
             conn.close()
 
 
@@ -554,9 +641,11 @@ def get_traffic_records(
     finally:
 
         if cursor is not None:
+
             cursor.close()
 
         if conn is not None:
+
             conn.close()
 
 
@@ -595,6 +684,7 @@ def update_alert_status(
     except Exception:
 
         if conn is not None:
+
             conn.rollback()
 
         raise
@@ -602,7 +692,9 @@ def update_alert_status(
     finally:
 
         if cursor is not None:
+
             cursor.close()
 
         if conn is not None:
+
             conn.close()
