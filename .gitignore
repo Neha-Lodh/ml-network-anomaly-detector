@@ -2,7 +2,6 @@
 .env
 
 # --- Python ---
-.env
 __pycache__/
 *.pyc
 *.pyo
@@ -13,6 +12,7 @@ env/
 .pytest_cache/
 
 # --- Trained ML models (regenerate with train_model.py) ---
+models/*.pkl
 
 # --- Uploaded files (runtime, not source) ---
 uploads/*
@@ -26,3 +26,4 @@ Thumbs.db
 
 # --- Logs ---
 *.log
+data/anomaly.db
