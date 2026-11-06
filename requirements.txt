@@ -4,3 +4,5 @@ pandas
 numpy
 scikit-learn
 joblib
+python-dotenv
+mysql-connector-python
