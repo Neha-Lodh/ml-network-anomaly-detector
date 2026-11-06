@@ -1,700 +1,405 @@
 """
 database.py
 ------------
-All MySQL database access for the project lives here.
+All database access for the project lives here.
 
-IMPORTANT:
-- Every query uses parameterized placeholders (%s)
-- Never use raw string formatting for SQL queries
-- Database credentials are loaded through Config
+The app tries MySQL first (using the credentials in your .env file).
+If MySQL is not reachable (wrong password, server not running, database
+missing and cannot be created), it AUTOMATICALLY falls back to a local
+SQLite file (data/anomaly.db) so the app still runs on localhost with
+zero setup.
+
+Force a backend with DB_BACKEND in .env:
+    DB_BACKEND=auto     (default: MySQL, else SQLite)
+    DB_BACKEND=mysql    (MySQL only, error if it fails)
+    DB_BACKEND=sqlite   (SQLite only)
+
+IMPORTANT: every query uses parameterized placeholders (%s) - never
+raw string formatting - to prevent SQL injection.
 """
 
-import mysql.connector
-from mysql.connector import Error as MySQLError
+import os
+import sqlite3
+from datetime import datetime
 
 from config import Config
 
+try:
+    import mysql.connector
+    from mysql.connector import Error as MySQLError
+except ImportError:  # mysql connector not installed -> SQLite only
+    mysql = None
+
+    class MySQLError(Exception):
+        pass
+
+SQLITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "anomaly.db")
+
+_backend = None          # "mysql" or "sqlite" (decided once, on first use)
+_backend_note = ""       # human-readable reason, shown by /health
+
 
 # ---------------------------------------------------------------
-# DATABASE CONNECTION
+# Backend selection
+# ---------------------------------------------------------------
+
+def _mysql_connect(with_db=True):
+    kwargs = dict(
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
+        connection_timeout=5,
+    )
+    if with_db:
+        kwargs["database"] = Config.DB_NAME
+    return mysql.connector.connect(**kwargs)
+
+
+def _create_mysql_schema():
+    """Create the database + tables in MySQL if they don't exist yet."""
+    conn = _mysql_connect(with_db=False)
+    cur = conn.cursor()
+    cur.execute(
+        f"CREATE DATABASE IF NOT EXISTS `{Config.DB_NAME}` "
+        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    )
+    cur.execute(f"USE `{Config.DB_NAME}`")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS traffic_records (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            upload_batch_id VARCHAR(64) NOT NULL,
+            record_timestamp VARCHAR(64) NULL,
+            src_ip VARCHAR(45) NOT NULL,
+            dst_ip VARCHAR(45) NOT NULL,
+            src_port INT NOT NULL,
+            dst_port INT NOT NULL,
+            protocol VARCHAR(10) NOT NULL,
+            duration FLOAT NOT NULL,
+            packet_count INT NOT NULL,
+            bytes_transferred BIGINT NOT NULL,
+            failed_connections INT NOT NULL DEFAULT 0,
+            is_anomaly TINYINT(1) NOT NULL DEFAULT 0,
+            risk_score INT NOT NULL DEFAULT 0,
+            risk_level VARCHAR(10) NOT NULL DEFAULT 'Low',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_batch (upload_batch_id),
+            INDEX idx_created_at (created_at),
+            INDEX idx_risk_level (risk_level)
+        ) ENGINE=InnoDB
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS alerts (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            traffic_record_id BIGINT NOT NULL,
+            upload_batch_id VARCHAR(64) NOT NULL,
+            src_ip VARCHAR(45) NOT NULL,
+            dst_ip VARCHAR(45) NOT NULL,
+            dst_port INT NOT NULL,
+            protocol VARCHAR(10) NOT NULL,
+            risk_score INT NOT NULL,
+            risk_level VARCHAR(10) NOT NULL,
+            explanation VARCHAR(500) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'New',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_alert_traffic FOREIGN KEY (traffic_record_id)
+                REFERENCES traffic_records(id) ON DELETE CASCADE,
+            INDEX idx_alert_batch (upload_batch_id),
+            INDEX idx_alert_risk (risk_level)
+        ) ENGINE=InnoDB
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def _init_sqlite():
+    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+    conn = sqlite3.connect(SQLITE_PATH)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS traffic_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            upload_batch_id TEXT NOT NULL,
+            record_timestamp TEXT,
+            src_ip TEXT NOT NULL,
+            dst_ip TEXT NOT NULL,
+            src_port INTEGER NOT NULL,
+            dst_port INTEGER NOT NULL,
+            protocol TEXT NOT NULL,
+            duration REAL NOT NULL,
+            packet_count INTEGER NOT NULL,
+            bytes_transferred INTEGER NOT NULL,
+            failed_connections INTEGER NOT NULL DEFAULT 0,
+            is_anomaly INTEGER NOT NULL DEFAULT 0,
+            risk_score INTEGER NOT NULL DEFAULT 0,
+            risk_level TEXT NOT NULL DEFAULT 'Low',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch ON traffic_records(upload_batch_id);
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            traffic_record_id INTEGER NOT NULL,
+            upload_batch_id TEXT NOT NULL,
+            src_ip TEXT NOT NULL,
+            dst_ip TEXT NOT NULL,
+            dst_port INTEGER NOT NULL,
+            protocol TEXT NOT NULL,
+            risk_score INTEGER NOT NULL,
+            risk_level TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'New',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (traffic_record_id) REFERENCES traffic_records(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_batch ON alerts(upload_batch_id);
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _decide_backend():
+    """Pick MySQL or SQLite once, the first time the database is used."""
+    global _backend, _backend_note
+    if _backend:
+        return _backend
+
+    wanted = os.getenv("DB_BACKEND", "auto").strip().lower()
+
+    if wanted != "sqlite" and mysql is not None:
+        try:
+            _create_mysql_schema()
+            _mysql_connect().close()
+            _backend, _backend_note = "mysql", "Connected to MySQL successfully."
+            return _backend
+        except Exception as e:
+            if wanted == "mysql":
+                raise
+            print(f"[database] MySQL unavailable ({e}). Falling back to SQLite: {SQLITE_PATH}")
+            _backend_note = f"MySQL unavailable ({e}). Using local SQLite database."
+    elif wanted == "mysql":
+        raise RuntimeError("mysql-connector-python is not installed.")
+    else:
+        _backend_note = "Using local SQLite database."
+
+    _init_sqlite()
+    _backend = "sqlite"
+    return _backend
+
+
+# ---------------------------------------------------------------
+# Connection helpers (same interface for both backends)
 # ---------------------------------------------------------------
 
 def get_connection():
-    """
-    Open a new MySQL connection using credentials from Config.
-    """
-
-    if not Config.DB_PASSWORD:
-        raise RuntimeError(
-            "MySQL password is missing. "
-            "Please set DB_PASSWORD in your .env file."
-        )
-
-    try:
-
-        conn = mysql.connector.connect(
-            host=Config.DB_HOST,
-            port=Config.DB_PORT,
-            user=Config.DB_USER,
-            password=Config.DB_PASSWORD,
-            database=Config.DB_NAME,
-        )
-
-        return conn
-
-    except MySQLError as e:
-
-        raise RuntimeError(
-            f"MySQL connection failed: {e}"
-        ) from e
+    if _decide_backend() == "mysql":
+        return _mysql_connect()
+    conn = sqlite3.connect(SQLITE_PATH)
+    conn.row_factory = lambda cur, row: {d[0]: row[i] for i, d in enumerate(cur.description)}
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
-# ---------------------------------------------------------------
-# TEST DATABASE CONNECTION
-# ---------------------------------------------------------------
+def _cursor(conn):
+    if _backend == "mysql":
+        return conn.cursor(dictionary=True)
+    return conn.cursor()
+
+
+def _sql(query):
+    """Our queries are written with %s placeholders; SQLite needs ?"""
+    return query if _backend == "mysql" else query.replace("%s", "?")
+
+
+def _exec(cur, query, params=()):
+    cur.execute(_sql(query), params)
+
 
 def test_connection():
-    """
-    Test whether MySQL is reachable.
-    """
-
-    conn = None
-
+    """Used by /health to report which database is in use."""
     try:
-
         conn = get_connection()
-
-        return True, "Connected to MySQL successfully."
-
+        conn.close()
+        return True, f"[{_backend}] {_backend_note}"
     except Exception as e:
-
         return False, str(e)
-
-    finally:
-
-        if conn is not None:
-
-            try:
-                conn.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------
-# INSERT: TRAFFIC RECORDS + ALERTS
+# INSERT: traffic records + alerts (called after each CSV upload)
 # ---------------------------------------------------------------
 
 def insert_traffic_and_alerts(results_df, batch_id: str):
-    """
-    Insert traffic records and anomalous records into MySQL.
-
-    Uses batch insertion to reduce the number of network
-    round trips between Render and the Aiven MySQL server.
-    """
-
-    conn = None
-    cursor = None
+    conn = get_connection()
+    cursor = _cursor(conn)
 
     traffic_insert_sql = """
         INSERT INTO traffic_records
-            (
-                upload_batch_id,
-                record_timestamp,
-                src_ip,
-                dst_ip,
-                src_port,
-                dst_port,
-                protocol,
-                duration,
-                packet_count,
-                bytes_transferred,
-                failed_connections,
-                is_anomaly,
-                risk_score,
-                risk_level
-            )
-        VALUES
-            (%s, %s, %s, %s, %s, %s, %s,
-             %s, %s, %s, %s, %s, %s, %s)
+            (upload_batch_id, record_timestamp, src_ip, dst_ip, src_port,
+             dst_port, protocol, duration, packet_count, bytes_transferred,
+             failed_connections, is_anomaly, risk_score, risk_level)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     alert_insert_sql = """
         INSERT INTO alerts
-            (
-                traffic_record_id,
-                upload_batch_id,
-                src_ip,
-                dst_ip,
-                dst_port,
-                protocol,
-                risk_score,
-                risk_level,
-                explanation,
-                status
-            )
-        VALUES
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (traffic_record_id, upload_batch_id, src_ip, dst_ip, dst_port,
+             protocol, risk_score, risk_level, explanation, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     try:
-
-        conn = get_connection()
-
-        cursor = conn.cursor()
-
-        # -------------------------------------------------------
-        # PREPARE TRAFFIC RECORDS
-        # -------------------------------------------------------
-
-        traffic_values = []
-
         for _, row in results_df.iterrows():
-
-            traffic_values.append(
+            _exec(
+                cursor,
+                traffic_insert_sql,
                 (
                     batch_id,
-
-                    str(
-                        row.get(
-                            "timestamp",
-                            ""
-                        )
-                    ),
-
+                    str(row.get("timestamp", "")),
                     str(row["src_ip"]),
-
                     str(row["dst_ip"]),
-
                     int(row["src_port"]),
-
                     int(row["dst_port"]),
-
                     str(row["protocol"]),
-
                     float(row["duration"]),
-
                     int(row["packet_count"]),
-
                     int(row["bytes_transferred"]),
-
                     int(row["failed_connections"]),
-
-                    bool(row["is_anomaly"]),
-
+                    int(bool(row["is_anomaly"])),
                     int(row["risk_score"]),
-
                     str(row["risk_level"]),
-                )
+                ),
             )
+            traffic_record_id = cursor.lastrowid
 
-        # -------------------------------------------------------
-        # BATCH INSERT TRAFFIC RECORDS
-        # -------------------------------------------------------
-
-        if traffic_values:
-
-            cursor.executemany(
-                traffic_insert_sql,
-                traffic_values
-            )
-
-        # -------------------------------------------------------
-        # GET INSERTED RECORD IDs
-        # -------------------------------------------------------
-        #
-        # All records from this upload have the same unique
-        # batch_id. We retrieve their generated IDs so that
-        # anomaly alerts can reference the correct traffic row.
-        #
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                src_ip,
-                dst_ip,
-                dst_port,
-                protocol
-            FROM traffic_records
-            WHERE upload_batch_id = %s
-            ORDER BY id ASC
-            """,
-            (batch_id,)
-        )
-
-        inserted_records = cursor.fetchall()
-
-        # -------------------------------------------------------
-        # VERIFY INSERT
-        # -------------------------------------------------------
-
-        if len(inserted_records) != len(results_df):
-
-            raise RuntimeError(
-                "Database insert verification failed: "
-                f"expected {len(results_df)} records but found "
-                f"{len(inserted_records)} records for batch "
-                f"{batch_id}."
-            )
-
-        # -------------------------------------------------------
-        # PREPARE ALERT RECORDS
-        # -------------------------------------------------------
-
-        alert_values = []
-
-        for (_, row), db_record in zip(
-            results_df.iterrows(),
-            inserted_records
-        ):
-
-            traffic_record_id = db_record[0]
-
-            # Insert alert only for anomalous traffic
-
-            if bool(row["is_anomaly"]):
-
-                alert_values.append(
+            if row["is_anomaly"]:
+                _exec(
+                    cursor,
+                    alert_insert_sql,
                     (
                         traffic_record_id,
-
                         batch_id,
-
                         str(row["src_ip"]),
-
                         str(row["dst_ip"]),
-
                         int(row["dst_port"]),
-
                         str(row["protocol"]),
-
                         int(row["risk_score"]),
-
                         str(row["risk_level"]),
-
-                        str(
-                            row.get(
-                                "explanation",
-                                ""
-                            )
-                        )[:500],
-
+                        str(row["explanation"])[:500],
                         "New",
-                    )
+                    ),
                 )
 
-        # -------------------------------------------------------
-        # BATCH INSERT ALERTS
-        # -------------------------------------------------------
-
-        if alert_values:
-
-            cursor.executemany(
-                alert_insert_sql,
-                alert_values
-            )
-
-        # -------------------------------------------------------
-        # COMMIT EVERYTHING
-        # -------------------------------------------------------
-
         conn.commit()
-
     except Exception:
-
-        if conn is not None:
-
-            conn.rollback()
-
+        conn.rollback()
         raise
-
     finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
+        cursor.close()
+        conn.close()
 
 
 # ---------------------------------------------------------------
-# DASHBOARD STATISTICS
+# READ: dashboard statistics
 # ---------------------------------------------------------------
 
 def get_dashboard_stats():
+    conn = get_connection()
+    cursor = _cursor(conn)
 
-    conn = None
-    cursor = None
+    stats = {}
 
-    try:
+    _exec(cursor, "SELECT COUNT(*) AS total FROM traffic_records")
+    stats["total_traffic"] = cursor.fetchone()["total"]
 
-        conn = get_connection()
+    _exec(cursor, "SELECT COUNT(*) AS total FROM traffic_records WHERE is_anomaly = 1")
+    stats["total_anomalies"] = cursor.fetchone()["total"]
 
-        cursor = conn.cursor(
-            dictionary=True
+    stats["total_normal"] = stats["total_traffic"] - stats["total_anomalies"]
+
+    if stats["total_traffic"] > 0:
+        stats["anomaly_percentage"] = round(
+            (stats["total_anomalies"] / stats["total_traffic"]) * 100, 2
         )
+    else:
+        stats["anomaly_percentage"] = 0.0
 
-        stats = {}
+    _exec(cursor,
+        """SELECT risk_level, COUNT(*) AS count
+           FROM traffic_records GROUP BY risk_level""")
+    risk_dist = {"Low": 0, "Medium": 0, "High": 0}
+    for r in cursor.fetchall():
+        risk_dist[r["risk_level"]] = r["count"]
+    stats["risk_distribution"] = risk_dist
 
-        # -------------------------------------------------------
-        # TOTAL TRAFFIC
-        # -------------------------------------------------------
+    _exec(cursor,
+        """SELECT protocol, COUNT(*) AS count
+           FROM traffic_records GROUP BY protocol""")
+    stats["protocol_distribution"] = {r["protocol"]: r["count"] for r in cursor.fetchall()}
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM traffic_records
-            """
-        )
+    _exec(cursor,
+        """SELECT upload_batch_id,
+                  COUNT(*) AS total,
+                  SUM(is_anomaly) AS anomalies,
+                  MIN(created_at) AS created_at
+           FROM traffic_records
+           GROUP BY upload_batch_id
+           ORDER BY MIN(created_at) DESC
+           LIMIT 15""")
+    activity_rows = cursor.fetchall()
+    activity_rows.reverse()
+    stats["traffic_activity"] = activity_rows
 
-        stats["total_traffic"] = (
-            cursor.fetchone()["total"]
-        )
+    cursor.close()
+    conn.close()
+    return stats
 
-        # -------------------------------------------------------
-        # TOTAL ANOMALIES
-        # -------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM traffic_records
-            WHERE is_anomaly = 1
-            """
-        )
-
-        stats["total_anomalies"] = (
-            cursor.fetchone()["total"]
-        )
-
-        stats["total_normal"] = (
-            stats["total_traffic"]
-            - stats["total_anomalies"]
-        )
-
-        # -------------------------------------------------------
-        # ANOMALY PERCENTAGE
-        # -------------------------------------------------------
-
-        if stats["total_traffic"] > 0:
-
-            stats["anomaly_percentage"] = round(
-                (
-                    stats["total_anomalies"]
-                    / stats["total_traffic"]
-                ) * 100,
-                2
-            )
-
-        else:
-
-            stats["anomaly_percentage"] = 0.0
-
-        # -------------------------------------------------------
-        # RISK DISTRIBUTION
-        # -------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                risk_level,
-                COUNT(*) AS count
-            FROM traffic_records
-            GROUP BY risk_level
-            """
-        )
-
-        risk_rows = cursor.fetchall()
-
-        risk_dist = {
-            "Low": 0,
-            "Medium": 0,
-            "High": 0
-        }
-
-        for row in risk_rows:
-
-            if row["risk_level"] in risk_dist:
-
-                risk_dist[
-                    row["risk_level"]
-                ] = row["count"]
-
-        stats["risk_distribution"] = risk_dist
-
-        # -------------------------------------------------------
-        # PROTOCOL DISTRIBUTION
-        # -------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                protocol,
-                COUNT(*) AS count
-            FROM traffic_records
-            GROUP BY protocol
-            """
-        )
-
-        protocol_rows = cursor.fetchall()
-
-        stats["protocol_distribution"] = {
-            row["protocol"]: row["count"]
-            for row in protocol_rows
-        }
-
-        # -------------------------------------------------------
-        # TRAFFIC ACTIVITY
-        # -------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                upload_batch_id,
-                COUNT(*) AS total,
-                SUM(is_anomaly) AS anomalies,
-                MIN(created_at) AS created_at
-            FROM traffic_records
-            GROUP BY upload_batch_id
-            ORDER BY created_at DESC
-            LIMIT 15
-            """
-        )
-
-        activity_rows = cursor.fetchall()
-
-        activity_rows.reverse()
-
-        stats["traffic_activity"] = (
-            activity_rows
-        )
-
-        return stats
-
-    finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
-
-
-# ---------------------------------------------------------------
-# RECENT ALERTS
-# ---------------------------------------------------------------
 
 def get_recent_alerts(limit: int = 10):
-
-    conn = None
-    cursor = None
-
-    try:
-
-        conn = get_connection()
-
-        cursor = conn.cursor(
-            dictionary=True
-        )
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM alerts
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (limit,)
-        )
-
-        return cursor.fetchall()
-
-    finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
+    conn = get_connection()
+    cursor = _cursor(conn)
+    _exec(cursor, "SELECT * FROM alerts ORDER BY created_at DESC, id DESC LIMIT %s", (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
 
 
-# ---------------------------------------------------------------
-# ALL ALERTS
-# ---------------------------------------------------------------
-
-def get_all_alerts(
-    risk_level_filter=None,
-    limit=200
-):
-
-    conn = None
-    cursor = None
-
-    try:
-
-        conn = get_connection()
-
-        cursor = conn.cursor(
-            dictionary=True
-        )
-
-        if (
-            risk_level_filter
-            and risk_level_filter != "All"
-        ):
-
-            cursor.execute(
-                """
-                SELECT *
-                FROM alerts
-                WHERE risk_level = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (
-                    risk_level_filter,
-                    limit
-                )
-            )
-
-        else:
-
-            cursor.execute(
-                """
-                SELECT *
-                FROM alerts
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,)
-            )
-
-        return cursor.fetchall()
-
-    finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
+def get_all_alerts(risk_level_filter=None, limit=200):
+    conn = get_connection()
+    cursor = _cursor(conn)
+    if risk_level_filter and risk_level_filter != "All":
+        _exec(cursor,
+            """SELECT * FROM alerts WHERE risk_level = %s
+               ORDER BY created_at DESC, id DESC LIMIT %s""",
+            (risk_level_filter, limit))
+    else:
+        _exec(cursor, "SELECT * FROM alerts ORDER BY created_at DESC, id DESC LIMIT %s", (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
 
 
-# ---------------------------------------------------------------
-# TRAFFIC RECORDS
-# ---------------------------------------------------------------
-
-def get_traffic_records(
-    limit: int = 100,
-    batch_id: str = None
-):
-
-    conn = None
-    cursor = None
-
-    try:
-
-        conn = get_connection()
-
-        cursor = conn.cursor(
-            dictionary=True
-        )
-
-        if batch_id:
-
-            cursor.execute(
-                """
-                SELECT *
-                FROM traffic_records
-                WHERE upload_batch_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (
-                    batch_id,
-                    limit
-                )
-            )
-
-        else:
-
-            cursor.execute(
-                """
-                SELECT *
-                FROM traffic_records
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,)
-            )
-
-        return cursor.fetchall()
-
-    finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
+def get_traffic_records(limit: int = 100, batch_id: str = None):
+    conn = get_connection()
+    cursor = _cursor(conn)
+    if batch_id:
+        _exec(cursor,
+            """SELECT * FROM traffic_records WHERE upload_batch_id = %s
+               ORDER BY created_at DESC LIMIT %s""",
+            (batch_id, limit))
+    else:
+        _exec(cursor, "SELECT * FROM traffic_records ORDER BY created_at DESC LIMIT %s", (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
 
 
-# ---------------------------------------------------------------
-# UPDATE ALERT STATUS
-# ---------------------------------------------------------------
-
-def update_alert_status(
-    alert_id: int,
-    new_status: str
-):
-
-    conn = None
-    cursor = None
-
-    try:
-
-        conn = get_connection()
-
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            UPDATE alerts
-            SET status = %s
-            WHERE id = %s
-            """,
-            (
-                new_status,
-                alert_id
-            )
-        )
-
-        conn.commit()
-
-    except Exception:
-
-        if conn is not None:
-
-            conn.rollback()
-
-        raise
-
-    finally:
-
-        if cursor is not None:
-
-            cursor.close()
-
-        if conn is not None:
-
-            conn.close()
+def update_alert_status(alert_id: int, new_status: str):
+    conn = get_connection()
+    cursor = _cursor(conn)
+    _exec(cursor, "UPDATE alerts SET status = %s WHERE id = %s", (new_status, alert_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
