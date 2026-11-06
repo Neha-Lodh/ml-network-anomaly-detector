@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}ML Model - ML Network Anomaly Detector{% endblock %}
+{% block content %}
+
+<h2 style="margin-bottom:4px;">ML Model</h2>
+<p class="section-sub">Information about the machine learning models used in this project.</p>
+
+<div class="section">
+    <div class="model-status">
+        {% if models_ready %}
+            <span class="dot dot-green"></span> <strong>Models are trained and ready.</strong>
+        {% else %}
+            <span class="dot dot-red"></span> <strong>Models are not trained yet.</strong>
+        {% endif %}
+    </div>
+
+    <form action="{{ url_for('ml_model_train') }}" method="POST">
+        <button type="submit" class="btn">
+            {{ 'Retrain Models on Sample Data' if models_ready else 'Train Models Now' }}
+        </button>
+    </form>
+</div>
+
+<div class="section">
+    <h2>How It Works</h2>
+    <p style="color:var(--text-secondary); line-height:1.7; font-size:14px;">
+        This project uses <strong>two</strong> complementary machine learning models:
+    </p>
+    <ul style="color:var(--text-secondary); line-height:1.8; font-size:14px;">
+        <li><strong>Isolation Forest</strong> (unsupervised) - learns what "normal" traffic looks like and
+            flags statistical outliers without needing labelled data.</li>
+        <li><strong>Random Forest Classifier</strong> (supervised) - trained on labelled examples to output
+            a confidence probability that a given traffic record is anomalous.</li>
+    </ul>
+    <p style="color:var(--text-secondary); line-height:1.7; font-size:14px;">
+        The two model outputs are combined into a single <strong>0-100 risk score</strong>
+        (60% Isolation Forest + 40% Random Forest), which is then mapped to a
+        <strong>Low / Medium / High</strong> risk level. A simple rule-based explanation
+        (e.g. "high failed connection count", "uncommon destination port") is generated
+        for every flagged record so the result is easy to understand.
+    </p>
+
+    <h3 style="margin-top:24px;">Features used</h3>
+    <p style="color:var(--text-secondary); font-size:14px;">
+        <code>src_port</code>, <code>dst_port</code>, <code>protocol</code>, <code>duration</code>,
+        <code>packet_count</code>, <code>bytes_transferred</code>, <code>failed_connections</code>,
+        and an engineered <code>bytes_per_packet</code> ratio.
+    </p>
+
+    <h3 style="margin-top:24px;">Files</h3>
+    <pre>train_model.py    -> trains and saves the models (joblib .pkl files)
+ml_predict.py     -> loads models and runs predictions
+risk_scoring.py   -> converts model output into a 0-100 risk score
+preprocessing.py  -> cleans data and extracts features
+models/           -> saved isolation_forest.pkl, random_forest.pkl, scaler.pkl</pre>
+</div>
+
+{% endblock %}

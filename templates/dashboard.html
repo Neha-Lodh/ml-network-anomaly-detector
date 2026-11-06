@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - ML Network Anomaly Detector{% endblock %}
+{% block content %}
+
+<h2 style="margin-bottom:4px;">Security Dashboard</h2>
+<p class="section-sub">Overview of all analyzed network traffic and detected anomalies.</p>
+
+{% if db_error %}
+    <div class="flash flash-error">
+        Could not load dashboard data from MySQL: {{ db_error }}<br>
+        Make sure your database is running and <code>.env</code> is configured correctly (see README.md).
+    </div>
+{% elif stats %}
+
+<div class="stats-grid">
+    <div class="stat-card blue">
+        <div class="label">Total Traffic</div>
+        <div class="value">{{ stats.total_traffic }}</div>
+    </div>
+    <div class="stat-card green">
+        <div class="label">Normal Traffic</div>
+        <div class="value">{{ stats.total_normal }}</div>
+    </div>
+    <div class="stat-card red">
+        <div class="label">Anomalies</div>
+        <div class="value">{{ stats.total_anomalies }}</div>
+    </div>
+    <div class="stat-card yellow">
+        <div class="label">Anomaly %</div>
+        <div class="value">{{ stats.anomaly_percentage }}%</div>
+    </div>
+</div>
+
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Normal vs Anomaly</h3>
+        <div class="chart-wrap"><canvas id="chartNormalAnomaly"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Protocol Distribution</h3>
+        <div class="chart-wrap"><canvas id="chartProtocol"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Traffic Activity (recent uploads)</h3>
+        <div class="chart-wrap"><canvas id="chartActivity"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Risk Distribution</h3>
+        <div class="chart-wrap"><canvas id="chartRisk"></canvas></div>
+    </div>
+</div>
+
+<div class="section">
+    <h2>Recent Alerts</h2>
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr><th>Time</th><th>Src IP</th><th>Dst IP</th><th>Port</th><th>Protocol</th><th>Risk Score</th><th>Level</th></tr>
+        </thead>
+        <tbody>
+        {% for a in recent_alerts %}
+            <tr>
+                <td>{{ a.created_at }}</td>
+                <td>{{ a.src_ip }}</td>
+                <td>{{ a.dst_ip }}</td>
+                <td>{{ a.dst_port }}</td>
+                <td>{{ a.protocol }}</td>
+                <td>{{ a.risk_score }}</td>
+                <td><span class="badge badge-{{ a.risk_level|lower }}">{{ a.risk_level }}</span></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="7" style="color:var(--text-secondary);">No alerts yet. Upload traffic on the Traffic Analysis page.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+
+{% else %}
+<p class="section-sub">No data yet. Upload a CSV on the Traffic Analysis page to get started.</p>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if stats %}
+<script>
+    const dashboardStats = {{ stats | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endif %}
+{% endblock %}
