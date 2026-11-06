@@ -226,7 +226,7 @@ just to make the output human-readable.
 
 | Problem | Fix |
 |---|---|
-| `Access denied for user` | Check `DB_USER` / `DB_PASSWORD` in `.env` |
+| `Access denied for user` | Check `DB_USER` / `DB_PASSWORD` in `.env`. The app now auto-falls back to a local SQLite database (`data/anomaly.db`), so it still runs. Set `DB_BACKEND=sqlite` to skip MySQL entirely, or `DB_BACKEND=mysql` to require it. |
 | `Unknown database 'network_anomaly_db'` | Run `mysql -u root -p < schema.sql` |
 | `ML models not found` | Run `python train_model.py` |
 | Dashboard shows "Could not load dashboard data" | MySQL isn't running, or `.env` is misconfigured |
