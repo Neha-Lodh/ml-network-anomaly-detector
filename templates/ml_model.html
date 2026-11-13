@@ -14,11 +14,16 @@
         {% endif %}
     </div>
 
+    {% if current_user.role == 'admin' %}
     <form action="{{ url_for('ml_model_train') }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn">
             {{ 'Retrain Models on Sample Data' if models_ready else 'Train Models Now' }}
         </button>
     </form>
+    {% else %}
+    <p style="color:var(--text-secondary); font-size:13.5px;">Only administrators can (re)train the models.</p>
+    {% endif %}
 </div>
 
 <div class="section">

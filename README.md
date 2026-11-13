@@ -49,6 +49,7 @@ ml_network_anomaly_detector/
 ├── app.py                     # Flask application (routes)
 ├── config.py                  # Loads settings from .env
 ├── database.py                # All MySQL queries (parameterized)
+├── auth.py                    # Login, roles, CSRF, password hashing, lockout
 ├── preprocessing.py           # Data cleaning + feature extraction
 ├── ml_predict.py              # Loads models, runs predictions
 ├── risk_scoring.py            # 0-100 risk score + Low/Medium/High + explanation
@@ -74,12 +75,16 @@ ml_network_anomaly_detector/
 │   ├── dashboard.html
 │   ├── traffic_analysis.html
 │   ├── alerts.html
-│   └── ml_model.html
+│   ├── ml_model.html
+│   ├── login.html / setup.html / register.html / account.html
+│   ├── admin_users.html       # User management (admin only)
+│   └── error.html
 │
 ├── static/
 │   ├── css/style.css          # Dark cybersecurity theme
 │   └── js/dashboard.js        # Chart.js rendering
 │
+├── tests/test_auth.py         # Authentication test-suite
 └── uploads/                   # Temporary storage for uploaded CSVs
 ```
 
@@ -176,6 +181,7 @@ Open your browser at: **http://127.0.0.1:5000**
 
 ### Step 8 — Test it
 
+0. On first run you'll be sent to **/setup** to create the administrator account, then log in.
 1. Go to **Traffic Analysis** → upload `data/sample_network_traffic.csv`.
 2. You'll see a results table with risk scores and explanations.
 3. Go to **Dashboard** to see charts update.
@@ -200,6 +206,48 @@ To reset the database at any time:
 DROP DATABASE network_anomaly_db;
 SOURCE schema.sql;
 ```
+
+---
+
+## 6b. Authentication & roles
+
+The whole app (except the Home page and `/login`) now requires a login.
+
+**First run:** open the app → you are redirected to `/setup` → create the
+administrator. After that, `/setup` is permanently closed.
+
+| Role | Can do |
+|------|--------|
+| `admin` | Everything: dashboard, upload/analyse, alerts, **retrain models**, **manage users** (`/admin/users`) |
+| `analyst` | Dashboard, upload/analyse CSVs, view and update alerts |
+
+**Security features**
+
+- Passwords stored only as salted hashes (Werkzeug scrypt) — never plain text
+- Password policy: min length (default 8), must include a letter and a number
+- Account lockout after 5 failed logins for 15 minutes (configurable)
+- Generic "Invalid username or password" message (no user enumeration)
+- New session on every login (prevents session fixation); sessions expire after 60 minutes
+- Cookies are `HttpOnly` + `SameSite=Lax` (set `SESSION_COOKIE_SECURE=True` behind HTTPS)
+- CSRF token required on every POST request
+- Open-redirect-safe `?next=` handling
+- Disabling or deleting a user ends their session immediately
+- The last active admin cannot be demoted, disabled or deleted
+- `/api/*` returns JSON `401`/`403` instead of redirecting
+
+**Settings** (all optional, in `.env`): `ALLOW_REGISTRATION`, `MIN_PASSWORD_LENGTH`,
+`MAX_FAILED_LOGINS`, `LOCKOUT_MINUTES`, `SESSION_LIFETIME_MINUTES`, `SESSION_COOKIE_SECURE`.
+
+**Run the tests** (uses a temporary SQLite DB, no MySQL needed):
+
+```cmd
+python -m unittest tests.test_auth -v
+```
+
+> If you already created the MySQL database earlier, you don't need to do
+> anything — the `users` table is created automatically on first start.
+> Before deploying anywhere public, set a strong `SECRET_KEY` and
+> `FLASK_DEBUG=False` (the app refuses to start with the default key when debug is off).
 
 ---
 
@@ -257,7 +305,6 @@ git status
 
 ## 10. Possible future improvements (mention in viva if asked)
 
-- Add user authentication/login for the dashboard
 - Real-time traffic capture (e.g. via `scapy`) instead of CSV upload
 - Email/SMS notifications for High-risk alerts
 - More advanced models (XGBoost, LSTM for sequential traffic)

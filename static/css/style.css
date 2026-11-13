@@ -288,3 +288,58 @@ code, pre {
     font-size: 13px;
 }
 pre { padding: 14px; overflow-x: auto; }
+
+/* =========================================================
+   Authentication
+   ========================================================= */
+.nav-user { display: flex; align-items: center; gap: 14px; }
+.nav-username { color: var(--text-secondary); font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.nav-username:hover { color: var(--accent-green); }
+.inline-form { display: inline-flex; gap: 6px; align-items: center; margin: 0; }
+.btn-sm { padding: 6px 14px; font-size: 12.5px; }
+.btn-block { display: block; width: 100%; margin-top: 18px; }
+.btn-danger { background: transparent; color: var(--accent-red); border: 1px solid var(--accent-red); }
+.btn-danger:hover { box-shadow: 0 6px 20px rgba(255,90,99,0.25); }
+
+.auth-card {
+    max-width: 420px;
+    margin: 40px auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 32px;
+    box-shadow: var(--shadow);
+}
+.auth-card h2 { margin-top: 0; }
+.auth-card label {
+    display: block;
+    margin: 14px 0 6px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.auth-card input[type="text"],
+.auth-card input[type="password"] { width: 100%; }
+.auth-card .hint { color: var(--text-secondary); font-size: 12px; margin: 10px 0 0; }
+.auth-alt { text-align: center; margin: 18px 0 0; font-size: 13px; color: var(--text-secondary); }
+.auth-alt a { color: var(--accent-blue); text-decoration: underline; }
+
+input[type="password"] {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    border-radius: 6px;
+}
+input[type="text"]:focus, input[type="password"]:focus, select:focus {
+    outline: none;
+    border-color: var(--accent-green);
+}
+
+.inline-fields { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.action-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.input-sm { padding: 5px 8px !important; font-size: 12.5px; width: 130px; }
+
+.badge-role-admin { background: rgba(255,159,67,0.14); color: var(--accent-orange); }
+.badge-role-analyst { background: rgba(63,177,255,0.12); color: var(--accent-blue); }

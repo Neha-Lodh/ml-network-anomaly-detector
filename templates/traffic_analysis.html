@@ -12,6 +12,7 @@
         </p>
     {% endif %}
     <form action="{{ url_for('traffic_upload') }}" method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="upload-box">
             <p>📂 Select a CSV file with columns: <code>timestamp, src_ip, dst_ip, src_port, dst_port, protocol, duration, packet_count, bytes_transferred, failed_connections</code></p>
             <input type="file" name="csv_file" accept=".csv" required>

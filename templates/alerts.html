@@ -40,6 +40,7 @@
                 <td>{{ a.status }}</td>
                 <td>
                     <form action="{{ url_for('update_alert', alert_id=a.id) }}" method="POST" style="display:flex; gap:6px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <select name="status">
                             <option value="New" {{ 'selected' if a.status=='New' }}>New</option>
                             <option value="Reviewed" {{ 'selected' if a.status=='Reviewed' }}>Reviewed</option>

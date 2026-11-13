@@ -9,10 +9,15 @@
         suspicious activity, and generate a simple 0-100 risk score with a plain-English
         explanation for every alert.
     </p>
+    {% if current_user %}
     <a href="{{ url_for('traffic_analysis') }}" class="btn">Analyze Traffic</a>
     <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">View Dashboard</a>
+    {% else %}
+    <a href="{{ url_for('login') }}" class="btn">Log in to continue</a>
+    {% if registration_open %}<a href="{{ url_for('register') }}" class="btn btn-secondary">Create account</a>{% endif %}
+    {% endif %}
 
-    {% if not models_ready %}
+    {% if not models_ready and current_user and current_user.role == 'admin' %}
     <p style="margin-top:18px; color:var(--accent-yellow); font-size:13px;">
         ⚠ ML models are not trained yet. Visit the <a href="{{ url_for('ml_model_page') }}" style="color:var(--accent-yellow); text-decoration:underline;">ML Model page</a> to train them on the sample dataset first.
     </p>
