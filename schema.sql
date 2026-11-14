@@ -66,21 +66,3 @@ CREATE TABLE IF NOT EXISTS alerts (
     INDEX idx_alert_batch (upload_batch_id),
     INDEX idx_alert_risk (risk_level)
 ) ENGINE=InnoDB;
-
--- ---------------------------------------------------------
--- Table: users
--- Login accounts. Passwords are stored ONLY as salted hashes.
--- role: 'admin' (full access) or 'analyst' (analyse traffic, manage alerts)
--- ---------------------------------------------------------
-CREATE TABLE IF NOT EXISTS users (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    username        VARCHAR(50)     NOT NULL UNIQUE,
-    email           VARCHAR(120)    NULL,
-    password_hash   VARCHAR(255)    NOT NULL,
-    role            VARCHAR(20)     NOT NULL DEFAULT 'analyst',
-    is_active       TINYINT(1)      NOT NULL DEFAULT 1,
-    failed_logins   INT             NOT NULL DEFAULT 0,
-    locked_until    DATETIME        NULL,
-    last_login      DATETIME        NULL,
-    created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;

@@ -20,7 +20,7 @@ raw string formatting - to prevent SQL injection.
 
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 
 from config import Config
 
@@ -34,11 +34,6 @@ except ImportError:  # mysql connector not installed -> SQLite only
         pass
 
 SQLITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "anomaly.db")
-
-def _utcnow():
-    """Naive UTC 'now' (how timestamps are stored in the users table)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
 
 _backend = None          # "mysql" or "sqlite" (decided once, on first use)
 _backend_note = ""       # human-readable reason, shown by /health
@@ -113,20 +108,6 @@ def _create_mysql_schema():
             INDEX idx_alert_risk (risk_level)
         ) ENGINE=InnoDB
     """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) NOT NULL UNIQUE,
-            email VARCHAR(120) NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            role VARCHAR(20) NOT NULL DEFAULT 'analyst',
-            is_active TINYINT(1) NOT NULL DEFAULT 1,
-            failed_logins INT NOT NULL DEFAULT 0,
-            locked_until DATETIME NULL,
-            last_login DATETIME NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB
-    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -171,18 +152,6 @@ def _init_sqlite():
             FOREIGN KEY (traffic_record_id) REFERENCES traffic_records(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_alert_batch ON alerts(upload_batch_id);
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'analyst',
-            is_active INTEGER NOT NULL DEFAULT 1,
-            failed_logins INTEGER NOT NULL DEFAULT 0,
-            locked_until TEXT,
-            last_login TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
     """)
     conn.commit()
     conn.close()
@@ -434,106 +403,3 @@ def update_alert_status(alert_id: int, new_status: str):
     conn.commit()
     cursor.close()
     conn.close()
-
-
-# ---------------------------------------------------------------
-# USERS (authentication)
-# ---------------------------------------------------------------
-
-def _one(query, params=()):
-    conn = get_connection()
-    cursor = _cursor(conn)
-    try:
-        _exec(cursor, query, params)
-        return cursor.fetchone()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def _write(query, params=()):
-    conn = get_connection()
-    cursor = _cursor(conn)
-    try:
-        _exec(cursor, query, params)
-        conn.commit()
-        return cursor.lastrowid
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def count_users():
-    return _one("SELECT COUNT(*) AS n FROM users")["n"]
-
-
-def count_active_admins():
-    return _one("SELECT COUNT(*) AS n FROM users WHERE role = %s AND is_active = 1", ("admin",))["n"]
-
-
-def get_user_by_id(user_id: int):
-    return _one("SELECT * FROM users WHERE id = %s", (user_id,))
-
-
-def get_user_by_username(username: str):
-    # Case-insensitive lookup so "Admin" and "admin" cannot both exist.
-    return _one("SELECT * FROM users WHERE LOWER(username) = LOWER(%s)", (username,))
-
-
-def list_users():
-    conn = get_connection()
-    cursor = _cursor(conn)
-    try:
-        _exec(cursor, "SELECT id, username, email, role, is_active, last_login, created_at "
-                      "FROM users ORDER BY id")
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def create_user(username: str, password_hash: str, role: str = "analyst", email: str = None):
-    return _write(
-        "INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s)",
-        (username, email, password_hash, role),
-    )
-
-
-def update_user_password(user_id: int, password_hash: str):
-    _write("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
-
-
-def update_user_role(user_id: int, role: str):
-    _write("UPDATE users SET role = %s WHERE id = %s", (role, user_id))
-
-
-def set_user_active(user_id: int, active: bool):
-    _write("UPDATE users SET is_active = %s WHERE id = %s", (1 if active else 0, user_id))
-
-
-def delete_user(user_id: int):
-    _write("DELETE FROM users WHERE id = %s", (user_id,))
-
-
-def record_failed_login(user_id: int, max_attempts: int, lock_minutes: int):
-    """Increment the failure counter; lock the account once it hits the limit."""
-    from datetime import timedelta
-    user = get_user_by_id(user_id)
-    if not user:
-        return
-    attempts = int(user["failed_logins"] or 0) + 1
-    if attempts >= max_attempts:
-        until = (_utcnow() + timedelta(minutes=lock_minutes)).strftime("%Y-%m-%d %H:%M:%S")
-        _write("UPDATE users SET failed_logins = %s, locked_until = %s WHERE id = %s",
-               (0, until, user_id))
-    else:
-        _write("UPDATE users SET failed_logins = %s WHERE id = %s", (attempts, user_id))
-
-
-def record_successful_login(user_id: int):
-    now = _utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    _write("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login = %s WHERE id = %s",
-           (now, user_id))
